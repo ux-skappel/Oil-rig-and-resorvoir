@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nordsjøbrønnen</title>
+<meta name="description" content="Offshore boresimulator i 3D med borefysikk, brønnkontroll og en PVT-lab for reservoarvæsken.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0b1318;
+  --panel: #111c23;
+  --panel-2: #16242d;
+  --panel-3: #1c2e39;
+  --line: #243842;
+  --line-2: #31505d;
+  --ink: #e4ecef;
+  --ink-2: #a5b8c1;
+  --ink-3: #718894;
+  --accent: #ff7a1a;
+  --accent-ink: #1d0e04;
+  --accent-soft: rgba(255, 122, 26, 0.14);
+  --chart-surface: #111c23;
+  --grid: #1e3039;
+  --axis: #37525e;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "Barlow", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --r: 6px;
+  --topbar: 52px;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 var(--f-body);
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3, h4 { font-family: var(--f-display); font-weight: 600; letter-spacing: 0.01em; text-wrap: balance; margin: 0; }
+.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font: 600 11px/1.2 var(--f-display); letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-3); }
+.muted { color: var(--ink-2); }
+.small { font-size: 13px; }
+[hidden] { display: none !important; }
+
+/* ---------- Toppfelt ---------- */
+.topbar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30;
+  display: flex; align-items: center; gap: 18px;
+  min-height: var(--topbar);
+  padding: 6px 16px;
+  background: #0d171d;
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; }
+.brand .well { font: 500 12px var(--f-mono); color: var(--ink-3); white-space: nowrap; }
+.tabs { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px; }
+.tabs button {
+  border: 0; background: transparent; padding: 5px 14px; border-radius: 6px;
+  font: 600 14px var(--f-display); letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-2); cursor: pointer;
+}
+.tabs button[aria-selected="true"] { background: var(--panel-3); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+.status { margin-left: auto; display: flex; align-items: center; gap: 14px; font: 500 13px var(--f-mono); color: var(--ink-2); white-space: nowrap; }
+.status b { color: var(--ink); font-weight: 600; }
+
+/* ---------- Visninger ---------- */
+.view { min-height: calc(100% - var(--topbar)); }
+#view-drill {
+  display: grid;
+  grid-template-columns: 318px minmax(0, 1fr) 390px;
+  height: calc(100vh - var(--topbar));
+  height: calc(100dvh - var(--topbar) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+}
+.console, .wellpanel { background: var(--panel); overflow-y: auto; overscroll-behavior: contain; }
+.console { border-right: 1px solid var(--line); padding: 12px 12px 24px; display: flex; flex-direction: column; gap: 12px; }
+.wellpanel { border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+
+/* ---------- Instrumentfelt ---------- */
+.gauges { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.gauge {
+  position: relative; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r);
+  padding: 7px 9px 5px; min-width: 0;
+}
+.gauge.state-warning { box-shadow: inset 3px 0 0 var(--warning); }
+.gauge.state-critical { box-shadow: inset 3px 0 0 var(--critical); }
+.gauge .eyebrow { display: flex; justify-content: space-between; gap: 4px; }
+.gauge .v { font: 600 21px/1.15 var(--f-mono); font-variant-numeric: tabular-nums; }
+.gauge .u { font: 500 11px var(--f-mono); color: var(--ink-3); margin-left: 3px; }
+.gauge canvas { display: block; width: 100%; height: 20px; margin-top: 2px; }
+.gauge.wide { grid-column: span 2; }
+.depthbox { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.depthbox div { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); padding: 6px 8px; min-width: 0; }
+.depthbox .v { font: 600 14px var(--f-mono); white-space: nowrap; }
+.formation-now { font-size: 13px; color: var(--ink-2); line-height: 1.35; }
+.formation-now b { color: var(--ink); font-weight: 600; }
+
+.group { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.group > .eyebrow { display: flex; justify-content: space-between; align-items: center; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.row.spread { justify-content: space-between; }
+.ctl { display: grid; grid-template-columns: 64px 1fr 58px; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.ctl output { font: 600 13px var(--f-mono); color: var(--ink); text-align: right; }
+input[type="range"] { width: 100%; accent-color: var(--accent); height: 22px; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--panel-3); border: 1px solid var(--line-2); border-radius: var(--r);
+  padding: 7px 11px; font: 600 13.5px var(--f-display); letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--ink); cursor: pointer; min-height: 34px; white-space: nowrap;
+}
+.btn:hover:not(:disabled) { border-color: var(--ink-3); }
+.btn:disabled { opacity: 0.42; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.danger { background: #7d1d17; border-color: var(--critical); }
+.btn.on { background: var(--accent-soft); border-color: var(--accent); color: #ffd2b0; }
+.btn.block { width: 100%; }
+.btn.sm { min-height: 28px; padding: 4px 8px; font-size: 12.5px; }
+.pumpset { display: flex; gap: 6px; }
+.pumpset label { display: flex; align-items: center; gap: 5px; font: 600 12px var(--f-mono); color: var(--ink-2); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); padding: 4px 8px; cursor: pointer; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.hint { font-size: 12.5px; color: var(--ink-3); line-height: 1.4; margin: 0; }
+.guide-inline { display: none; }
+.guide-inline b { display: block; font: 600 15px var(--f-display); letter-spacing: 0.02em; color: var(--ink); }
+.speed { display: flex; gap: 3px; flex-wrap: wrap; }
+.speed button { flex: 1; min-width: 40px; }
+.mudrow { display: grid; grid-template-columns: 1fr 88px auto; gap: 6px; align-items: center; }
+.mudrow input { width: 100%; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r); padding: 6px 8px; font-family: var(--f-mono); }
+
+/* ---------- 3D-visning ---------- */
+.viewport { position: relative; min-width: 0; min-height: 0; background: #0d1a22; overflow: hidden; }
+.viewport canvas { display: block; }
+.label-layer { position: absolute; inset: 0; pointer-events: none; }
+.lbl { pointer-events: auto; display: flex; flex-direction: column; align-items: flex-start; }
+.lbl-part { background: rgba(10, 20, 26, 0.82); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); padding: 3px 7px; border-radius: 4px; cursor: pointer; }
+.lbl-part .lbl-t { font: 600 12.5px var(--f-display); letter-spacing: 0.03em; }
+.lbl-part .lbl-s { font: 500 10.5px var(--f-mono); color: var(--ink-3); }
+.lbl-formation { pointer-events: none; }
+.lbl-formation .lbl-t { font: 600 13px var(--f-display); letter-spacing: 0.03em; color: #eef3f5; text-shadow: 0 1px 2px #000; }
+.lbl-formation .lbl-s { font: 12px var(--f-body); color: #b7c7cf; text-shadow: 0 1px 2px #000; }
+.lbl-depth { pointer-events: none; align-items: flex-end; }
+.lbl-depth .lbl-t { font: 500 11.5px var(--f-mono); color: #b7c7cf; }
+.lbl-fluid { pointer-events: none; }
+.lbl-fluid .lbl-t { font: 700 13px var(--f-display); letter-spacing: 0.06em; text-transform: uppercase; color: #fff; text-shadow: 0 1px 3px #000; }
+.hud { position: absolute; z-index: 5; }
+.hud-cams { top: 10px; left: 10px; display: flex; flex-wrap: wrap; gap: 4px; max-width: calc(100% - 160px); }
+.hud-cams .btn { background: rgba(14, 26, 33, 0.85); backdrop-filter: blur(4px); }
+.hud-right { top: 10px; right: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.alarmbar { top: 92px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 5px; width: min(520px, calc(100% - 24px)); pointer-events: none; }
+.alarm {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--r);
+  background: rgba(13, 22, 28, 0.9); border: 1px solid var(--line-2); font-size: 13.5px; font-weight: 500;
+}
+.alarm .ic { width: 18px; height: 18px; flex: none; border-radius: 50%; display: grid; place-items: center; font: 700 12px var(--f-mono); color: #120b05; }
+.alarm.critical { border-color: var(--critical); box-shadow: inset 4px 0 0 var(--critical); }
+.alarm.critical .ic { background: var(--critical); color: #fff; }
+.alarm.serious { box-shadow: inset 4px 0 0 var(--serious); }
+.alarm.serious .ic { background: var(--serious); }
+.alarm.warning { box-shadow: inset 4px 0 0 var(--warning); }
+.alarm.warning .ic { background: var(--warning); }
+.alarm.info .ic { background: var(--s1); color: #fff; }
+.guide {
+  left: 10px; bottom: 10px; width: min(360px, calc(100% - 20px));
+  background: rgba(12, 22, 28, 0.9); backdrop-filter: blur(6px); border: 1px solid var(--line-2); border-radius: 8px; padding: 10px 12px;
+}
+.guide h3 { font-size: 15px; display: flex; align-items: center; gap: 8px; }
+.guide h3::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.guide p { margin: 4px 0 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.45; }
+.guide .gclose { position: absolute; top: 6px; right: 8px; background: none; border: 0; color: var(--ink-3); cursor: pointer; font-size: 16px; }
+.opbar { bottom: 12px; left: 50%; transform: translateX(-50%); width: min(460px, calc(100% - 24px)); background: rgba(12, 22, 28, 0.92); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 12px; }
+.opbar .track { height: 5px; background: var(--panel-3); border-radius: 3px; margin-top: 6px; overflow: hidden; }
+.opbar .fill { height: 100%; background: var(--accent); width: 0; transition: width 0.2s linear; }
+.tooltip3d { position: absolute; z-index: 8; pointer-events: none; background: rgba(8, 15, 19, 0.94); border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 9px; max-width: 280px; }
+.tooltip3d b { font: 600 14px var(--f-display); letter-spacing: 0.02em; display: block; }
+.tooltip3d span { font: 11px var(--f-mono); color: var(--ink-3); }
+.partcard { right: 10px; bottom: 10px; width: min(340px, calc(100% - 20px)); background: rgba(12, 22, 28, 0.95); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 14px; }
+.partcard h3 { font-size: 18px; }
+.partcard .en { font: 12px var(--f-mono); color: var(--ink-3); }
+.partcard p { margin: 8px 0 10px; font-size: 14px; color: var(--ink-2); line-height: 1.5; }
+.overlay-msg { inset: 0; display: grid; place-items: center; background: rgba(6, 12, 15, 0.72); z-index: 12; padding: 16px; }
+.overlay-msg .box { max-width: 460px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 10px; padding: 18px 20px; }
+.overlay-msg h2 { font-size: 24px; margin-bottom: 6px; }
+.overlay-msg p { color: var(--ink-2); margin: 0 0 14px; }
+
+/* ---------- Brønnpanel ---------- */
+.ptabs { display: flex; gap: 0; border-bottom: 1px solid var(--line); background: #0f1a21; position: sticky; top: 0; z-index: 2; overflow-x: auto; scrollbar-width: none; }
+.ptabs button {
+  flex: 1 1 auto; border: 0; background: transparent; padding: 10px 6px 8px; font: 600 12.5px var(--f-display); letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap;
+  color: var(--ink-3); cursor: pointer; border-bottom: 2px solid transparent;
+}
+.ptabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.ptabs button .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--critical); margin-left: 5px; vertical-align: 2px; }
+.pane { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.pane canvas { display: block; width: 100%; background: var(--chart-surface); border: 1px solid var(--line); border-radius: var(--r); }
+.kv { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; font-size: 13.5px; }
+.kv dt { color: var(--ink-2); }
+.kv dd { margin: 0; font: 600 13px var(--f-mono); text-align: right; }
+.callout { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); padding: 9px 11px; font-size: 13.5px; color: var(--ink-2); line-height: 1.45; }
+.callout b { color: var(--ink); }
+.callout.warn { box-shadow: inset 3px 0 0 var(--warning); }
+.callout.crit { box-shadow: inset 3px 0 0 var(--critical); }
+.events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.events li { display: grid; grid-template-columns: 86px 1fr; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; line-height: 1.4; }
+.events time { font: 11.5px var(--f-mono); color: var(--ink-3); padding-top: 1px; }
+.events li.alarm-l { color: #ffb4ab; }
+.events li.warn-l { color: #ffd9a0; }
+.events li.op-l { color: var(--ink-2); }
+.seg { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); padding: 2px; gap: 2px; }
+.seg button { border: 0; background: transparent; padding: 4px 9px; border-radius: 4px; font: 600 12px var(--f-display); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--panel-3); color: var(--ink); }
+.check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.check input { accent-color: var(--accent); }
+
+/* ---------- Tabeller og diagrammer ---------- */
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); }
+table.data { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.data th { text-align: right; font: 600 11.5px var(--f-display); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); padding: 6px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--panel-2); position: sticky; top: 0; }
+table.data th:first-child, table.data td:first-child { text-align: left; }
+table.data td { text-align: right; padding: 5px 9px; border-bottom: 1px solid var(--grid); font-family: var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.data tr:last-child td { border-bottom: 0; }
+table.data td.name { font-family: var(--f-body); }
+.chart { position: relative; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0 0 4px 50px; font-size: 12.5px; color: var(--ink-2); }
+.chart-key { display: inline-flex; align-items: center; gap: 6px; }
+.chart-key i { width: 16px; height: 2px; border-radius: 1px; display: inline-block; }
+.chart-key i.dashed { background-image: linear-gradient(90deg, currentColor 50%, transparent 50%) !important; background-size: 6px 2px; }
+.chart-plot { position: relative; }
+.chart svg { display: block; overflow: visible; }
+.chart .grid line { stroke: var(--grid); stroke-width: 1; }
+.chart .axis { stroke: var(--axis); stroke-width: 1; }
+.chart .tick { fill: var(--ink-3); font: 11px var(--f-mono); }
+.chart .axis-label { fill: var(--ink-2); font: 600 12px var(--f-display); letter-spacing: 0.04em; }
+.chart .ref { stroke: var(--ink-3); stroke-width: 1; }
+.chart .ref-label, .chart .mk-label { fill: var(--ink-2); font: 500 11.5px var(--f-mono); }
+.chart .crosshair { stroke: var(--ink-3); stroke-width: 1; }
+.chart-tip { position: absolute; z-index: 4; pointer-events: none; background: #0a1318; border: 1px solid var(--line-2); border-radius: 6px; padding: 6px 9px; min-width: 140px; font-size: 12.5px; box-shadow: 0 6px 18px rgba(0,0,0,0.4); }
+.tip-head { font: 11px var(--f-mono); color: var(--ink-3); margin-bottom: 3px; }
+.tip-row { display: grid; grid-template-columns: 14px auto 1fr; gap: 6px; align-items: center; }
+.tip-row i { width: 12px; height: 2px; display: inline-block; }
+.tip-row b { font: 600 12.5px var(--f-mono); color: var(--ink); }
+.tip-row span { color: var(--ink-2); white-space: nowrap; }
+
+/* ---------- PVT-lab ---------- */
+#view-pvt { display: grid; grid-template-columns: 340px minmax(0, 1fr); min-height: calc(100vh - var(--topbar)); }
+.pvt-inputs { background: var(--panel); border-right: 1px solid var(--line); padding: 14px 14px 30px; display: flex; flex-direction: column; gap: 14px; }
+.pvt-inputs h2 { font-size: 20px; }
+.field { display: grid; grid-template-columns: 1fr 110px; gap: 8px; align-items: center; font-size: 13.5px; color: var(--ink-2); }
+.field input, .field select, .sel { width: 100%; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r); padding: 6px 8px; color: var(--ink); font-family: var(--f-mono); font-size: 13px; }
+.field select, .sel { font-family: var(--f-body); }
+.field .unit { display: block; font: 11px var(--f-mono); color: var(--ink-3); }
+.field.full { grid-template-columns: 1fr; }
+.field.sel-field { grid-template-columns: 1fr; gap: 4px; }
+.pvt-main { padding: 14px 18px 40px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.pvt-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.pvt-head h2 { font-size: 26px; font-weight: 700; }
+.sample { font: 12px var(--f-mono); color: var(--ink-3); }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 9px 11px; }
+.stat .v { font: 600 20px/1.2 var(--f-body); }
+.stat .v small { font: 500 12px var(--f-mono); color: var(--ink-3); margin-left: 4px; }
+.stat .d { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(430px, 100%), 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.card h3 { font-size: 16px; margin-bottom: 2px; }
+.card .sub { font-size: 12.5px; color: var(--ink-3); margin-bottom: 8px; }
+details.tbl summary { cursor: pointer; font: 600 12.5px var(--f-display); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); margin: 8px 0 6px; }
+.subtabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--line); }
+.subtabs button { border: 0; background: transparent; padding: 8px 12px; font: 600 14px var(--f-display); letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); cursor: pointer; border-bottom: 2px solid transparent; }
+.subtabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.comp-table input { width: 72px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 4px; padding: 3px 6px; font: 12.5px var(--f-mono); color: var(--ink); text-align: right; }
+.eq-group { display: flex; flex-direction: column; gap: 10px; }
+.eq { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.eq h4 { font-size: 15px; }
+.eq .ref { font: 11.5px var(--f-mono); color: var(--ink-3); }
+.eq .tex { overflow-x: auto; padding: 8px 0 2px; font-family: var(--f-mono); font-size: 13px; color: var(--ink); }
+.eq .tex mjx-container { color: var(--ink); }
+.eq p { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-2); }
+.fluidtype { display: inline-flex; align-items: center; gap: 8px; background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 999px; padding: 3px 12px; font: 600 14px var(--f-display); letter-spacing: 0.04em; }
+
+/* ---------- Ordliste ---------- */
+#view-glossary { padding: 18px 16px 40px; }
+.gl-head { max-width: 1100px; margin: 0 auto 14px; display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; justify-content: space-between; }
+.gl-head h2 { font-size: 28px; font-weight: 700; }
+.gl-head p { margin: 4px 0 0; color: var(--ink-2); max-width: 62ch; }
+.gl-grid { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 10px; }
+.gl-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.gl-card h3 { font-size: 17px; }
+.gl-card .en { font: 12px var(--f-mono); color: var(--ink-3); }
+.gl-card p { margin: 0; font-size: 14px; color: var(--ink-2); line-height: 1.5; flex: 1; }
+.gl-card .btn { align-self: flex-start; }
+.gl-terms { max-width: 1100px; margin: 22px auto 0; }
+.gl-terms h3 { font-size: 20px; margin-bottom: 8px; }
+.gl-terms dl { display: grid; grid-template-columns: minmax(120px, 220px) 1fr; gap: 0; margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.gl-terms dt, .gl-terms dd { padding: 8px 12px; border-bottom: 1px solid var(--line); margin: 0; }
+.gl-terms dt { font: 600 14px var(--f-display); letter-spacing: 0.03em; background: var(--panel); }
+.gl-terms dd { color: var(--ink-2); font-size: 14px; background: var(--panel); }
+.search { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r); padding: 7px 10px; width: min(280px, 100%); }
+
+/* ---------- Startdialog ---------- */
+.modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(4, 9, 12, 0.78); padding: 16px; overflow-y: auto; }
+.modal .box { width: min(760px, 100%); background: var(--panel); border: 1px solid var(--line-2); border-radius: 12px; padding: 22px 22px 18px; }
+.modal h2 { font-size: 30px; font-weight: 700; }
+.modal .lead { color: var(--ink-2); margin: 6px 0 16px; max-width: 62ch; }
+.scen { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.scen button { text-align: left; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 13px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+.scen button:hover { border-color: var(--accent); }
+.scen button.rec { border-color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
+.scen b { font: 600 18px var(--f-display); letter-spacing: 0.02em; }
+.scen span { font-size: 13.5px; color: var(--ink-2); line-height: 1.45; }
+.scen em { font: 600 11px var(--f-display); letter-spacing: 0.09em; text-transform: uppercase; color: var(--accent); font-style: normal; }
+.modal .foot { margin-top: 14px; font-size: 12.5px; color: var(--ink-3); }
+
+/* ---------- Mobil og nettbrett ---------- */
+@media (max-width: 1180px) {
+  #view-drill { grid-template-columns: 300px minmax(0, 1fr); grid-template-rows: minmax(420px, 62vh) auto; height: auto; }
+  .viewport { grid-column: 2; grid-row: 1; }
+  .console { grid-column: 1; grid-row: 1 / span 2; }
+  .wellpanel { grid-column: 2; grid-row: 2; border-left: 0; border-top: 1px solid var(--line); max-height: none; }
+}
+@media (max-width: 760px) {
+  .topbar { flex-wrap: wrap; gap: 8px 12px; padding: 8px 16px; }
+  .brand .well { display: none; }
+  .tabs { order: 3; width: 100%; }
+  .tabs button { flex: 1; padding: 6px 4px; }
+  .status { margin-left: auto; font-size: 12px; gap: 10px; }
+  .status .opt { display: none; }
+  #view-drill { display: flex; flex-direction: column; height: auto; }
+  .viewport { height: 58vh; min-height: 360px; order: -1; }
+  .console { border-right: 0; border-top: 1px solid var(--line); overflow: visible; padding: 12px 16px 16px; }
+  .wellpanel { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+  .pane { padding: 12px 16px; }
+  .guide { display: none; }
+  .guide-inline { display: block; box-shadow: inset 3px 0 0 var(--accent); }
+  .hud-cams { flex-wrap: nowrap; overflow-x: auto; max-width: calc(100% - 20px); scrollbar-width: none; padding-bottom: 2px; }
+  .hud-cams .btn { min-height: 30px; padding: 4px 8px; font-size: 12px; flex: none; }
+  .hud-right { top: auto; bottom: 10px; }
+  .alarmbar { top: 52px; }
+  #view-pvt { display: flex; flex-direction: column; }
+  .pvt-inputs { border-right: 0; border-bottom: 1px solid var(--line); padding: 14px 16px; }
+  .pvt-main { padding: 14px 16px 30px; }
+  .gl-terms dl { grid-template-columns: 1fr; }
+  .gl-terms dt { border-bottom: 0; padding-bottom: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>Nordsjøbrønnen</h1>
+    <span class="well">Brønn 35/13-1 · halvt nedsenkbar rigg · 350 m havdyp</span>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Velg visning">
+    <button role="tab" id="tab-drill" aria-controls="view-drill" aria-selected="true">Boresimulator</button>
+    <button role="tab" id="tab-pvt" aria-controls="view-pvt" aria-selected="false">PVT-lab</button>
+    <button role="tab" id="tab-glossary" aria-controls="view-glossary" aria-selected="false">Ordliste</button>
+  </nav>
+  <div class="status" aria-live="off">
+    <span id="st-clock" class="num">Dag 1 06:00</span>
+    <span class="opt">Kostnad <b id="st-cost" class="num">0</b> MNOK</span>
+    <span class="opt">Tid <b id="st-speed" class="num">30×</b></span>
+  </div>
+</header>
+
+<main>
+  <!-- ================= BORESIMULATOR ================= -->
+  <section id="view-drill" class="view" role="tabpanel" aria-labelledby="tab-drill">
+    <aside class="console" aria-label="Borekonsoll">
+      <div class="callout guide-inline" id="guide-inline" aria-live="polite"><b></b> <span></span></div>
+      <div class="gauges" id="gauges"></div>
+      <div class="depthbox">
+        <div><div class="eyebrow">Hulldybde</div><div class="v num" id="d-hole">–</div></div>
+        <div><div class="eyebrow">Krone</div><div class="v num" id="d-bit">–</div></div>
+        <div><div class="eyebrow">Blokk</div><div class="v num" id="d-block">–</div></div>
+      </div>
+      <div class="formation-now" id="formation-now"></div>
+
+      <div class="group">
+        <div class="eyebrow">Slampumper <span class="num muted" id="pump-flow">0 L/min</span></div>
+        <div class="row spread">
+          <button class="btn" id="btn-pumps" aria-pressed="false">Start pumper</button>
+          <div class="pumpset">
+            <label><input type="checkbox" id="pump1" checked> P1</label>
+            <label><input type="checkbox" id="pump2" checked> P2</label>
+            <label><input type="checkbox" id="pump3"> P3</label>
+          </div>
+        </div>
+        <div class="ctl"><label for="spm">Slag/min</label><input type="range" id="spm" min="0" max="125" step="1"><output id="spm-v" class="num">0</output></div>
+      </div>
+
+      <div class="group">
+        <div class="eyebrow">Toppdrev</div>
+        <div class="row"><button class="btn" id="btn-rot" aria-pressed="false">Start rotasjon</button></div>
+        <div class="ctl"><label for="rpm">RPM</label><input type="range" id="rpm" min="0" max="220" step="5"><output id="rpm-v" class="num">0</output></div>
+      </div>
+
+      <div class="group">
+        <div class="eyebrow">Heiseverk og autodriller</div>
+        <div class="row spread">
+          <button class="btn on" id="btn-auto" aria-pressed="true">Autodriller på</button>
+          <div class="row">
+            <button class="btn sm" id="btn-up" aria-label="Hev blokken">▲ Hev</button>
+            <button class="btn sm" id="btn-down" aria-label="Senk blokken">▼ Senk</button>
+          </div>
+        </div>
+        <div class="ctl"><label for="wob">WOB (t)</label><input type="range" id="wob" min="0" max="30" step="0.5"><output id="wob-v" class="num">0</output></div>
+        <p class="hint">Autodrilleren senker blokken og holder valgt vekt på krona når pumper og rotasjon går. Hold inne Hev eller Senk (eller piltastene) for manuell styring.</p>
+      </div>
+
+      <div class="group">
+        <div class="eyebrow">Operasjoner</div>
+        <div class="actions">
+          <button class="btn primary" id="btn-conn">Kobling</button>
+          <button class="btn" id="btn-flowcheck">Strømningssjekk</button>
+          <button class="btn danger" id="btn-bop">Steng BOP</button>
+          <button class="btn" id="btn-trip">Bytt krone</button>
+          <button class="btn" id="btn-casing" style="grid-column: span 2">Kjør foringsrør</button>
+        </div>
+        <p class="hint" id="op-hint"></p>
+      </div>
+
+      <div class="group">
+        <div class="eyebrow">Slam <span class="num muted" id="mud-info"></span></div>
+        <div class="mudrow">
+          <label for="mw-target" class="small muted">Ny slamvekt (sg)</label>
+          <input type="number" id="mw-target" step="0.01" min="1.00" max="2.10">
+          <button class="btn sm" id="btn-mix">Bland</button>
+        </div>
+        <p class="hint" id="mix-hint"></p>
+      </div>
+
+      <div class="group">
+        <div class="eyebrow">Vær og hiv</div>
+        <div class="ctl"><label for="hs">Hs (m)</label><input type="range" id="hs" min="0" max="9" step="0.5"><output id="hs-v" class="num">0</output></div>
+        <label class="check"><input type="checkbox" id="heavecomp" checked> Hivkompensator (CMC) på</label>
+      </div>
+
+      <div class="group">
+        <div class="eyebrow">Simuleringstid</div>
+        <div class="speed" id="speed">
+          <button class="btn sm" data-s="0" aria-label="Pause">❚❚</button>
+          <button class="btn sm" data-s="1">1×</button>
+          <button class="btn sm" data-s="10">10×</button>
+          <button class="btn sm" data-s="30">30×</button>
+          <button class="btn sm" data-s="120">120×</button>
+          <button class="btn sm" data-s="600">600×</button>
+        </div>
+        <button class="btn sm" id="btn-restart">Ny start / velg scenario</button>
+      </div>
+    </aside>
+
+    <div class="viewport" id="viewport">
+      <div class="hud hud-cams" id="cams" role="toolbar" aria-label="Kameravinkler"></div>
+      <div class="hud hud-right">
+        <label class="check btn sm" style="background: rgba(14,26,33,0.85)"><input type="checkbox" id="labels-toggle"> Navneskilt</label>
+      </div>
+      <div class="hud alarmbar" id="alarms" aria-live="polite"></div>
+      <div class="hud guide" id="guide">
+        <button class="gclose" id="guide-close" aria-label="Skjul veileder">×</button>
+        <h3 id="guide-title">Veileder</h3>
+        <p id="guide-text"></p>
+      </div>
+      <div class="hud opbar" id="opbar" hidden>
+        <div class="row spread"><span class="eyebrow" id="op-name"></span><span class="num small muted" id="op-pct"></span></div>
+        <div class="small" id="op-step"></div>
+        <div class="track"><div class="fill" id="op-fill"></div></div>
+      </div>
+      <div class="tooltip3d" id="tip3d" hidden></div>
+      <div class="hud partcard" id="partcard" hidden>
+        <div class="eyebrow">Riggdel</div>
+        <h3 id="pc-name"></h3>
+        <div class="en" id="pc-en"></div>
+        <p id="pc-text"></p>
+        <div class="row"><button class="btn sm" id="pc-focus">Vis nærmere</button><button class="btn sm" id="pc-close">Lukk</button></div>
+      </div>
+      <div class="hud overlay-msg" id="gameover" hidden>
+        <div class="box">
+          <h2 id="go-title">Simuleringen er stoppet</h2>
+          <p id="go-text"></p>
+          <div class="row"><button class="btn primary" id="go-restart">Start på nytt</button></div>
+        </div>
+      </div>
+      <div class="hud overlay-msg" id="webgl-fail" hidden>
+        <div class="box"><h2>3D kunne ikke startes</h2><p>3D-biblioteket kunne ikke lastes, eller nettleseren støtter ikke WebGL. Borekonsollen og panelene virker fortsatt.</p><div class="row"><button class="btn primary" id="reload-3d">Last inn på nytt</button></div></div>
+      </div>
+    </div>
+
+    <aside class="wellpanel" aria-label="Brønnpanel">
+      <div class="ptabs" role="tablist" id="ptabs">
+        <button role="tab" data-p="well" aria-selected="true">Brønn</button>
+        <button role="tab" data-p="press" aria-selected="false">Trykk</button>
+        <button role="tab" data-p="log" aria-selected="false">Logg</button>
+        <button role="tab" data-p="wc" aria-selected="false">Brønnkontroll</button>
+        <button role="tab" data-p="ev" aria-selected="false">Rapport</button>
+      </div>
+      <div class="pane" data-pane="well">
+        <div class="row spread">
+          <h3 id="sec-title" style="font-size:17px"></h3>
+          <div class="seg" id="well-zoom"><button aria-pressed="true" data-z="0">Hele</button><button aria-pressed="false" data-z="1">Nær krona</button></div>
+        </div>
+        <canvas id="cv-well" style="height: 520px" aria-label="Brønnskjema"></canvas>
+        <dl class="kv" id="well-kv"></dl>
+      </div>
+      <div class="pane" data-pane="press" hidden>
+        <h3 style="font-size:17px">Trykkvindu</h3>
+        <p class="hint">Slamvekten må ligge mellom poretrykket og oppsprekkingstrykket. Prognosen kommer fra boreprogrammet. Det faktiske poretrykket kjenner man ikke før man borer.</p>
+        <canvas id="cv-press" style="height: 440px" aria-label="Trykkvindu"></canvas>
+        <label class="check"><input type="checkbox" id="truth"> Vis faktisk poretrykk (fasit)</label>
+        <dl class="kv" id="press-kv"></dl>
+      </div>
+      <div class="pane" data-pane="log" hidden>
+        <h3 style="font-size:17px">Borelogg og LWD</h3>
+        <p class="hint">Faller dc-eksponenten og øker gassen mens du borer skifer, betyr det at poretrykket stiger. Vekt opp slammet før du går inn i sandsteinen.</p>
+        <canvas id="cv-log" style="height: 460px" aria-label="Borelogg"></canvas>
+        <canvas id="cv-trend" style="height: 300px" aria-label="Trender siste time"></canvas>
+      </div>
+      <div class="pane" data-pane="wc" hidden>
+        <h3 style="font-size:17px">Brønnkontroll</h3>
+        <div id="wc-status" class="callout"></div>
+        <dl class="kv" id="wc-kv"></dl>
+        <div class="row" id="wc-actions">
+          <button class="btn sm" id="btn-kmw">Bland drepeslam</button>
+          <button class="btn sm primary" id="btn-kill-ww">Drep: vent og vekt</button>
+          <button class="btn sm" id="btn-kill-dm">Borerens metode</button>
+          <button class="btn sm" id="btn-dm2" hidden>Start 2. sirkulasjon</button>
+          <button class="btn sm" id="btn-openbop">Åpne BOP</button>
+        </div>
+        <div class="row spread">
+          <span class="eyebrow">Choke</span>
+          <div class="seg" id="choke-mode"><button aria-pressed="true" data-m="auto">Auto</button><button aria-pressed="false" data-m="manual">Manuell</button></div>
+        </div>
+        <div class="ctl"><label for="choke">Åpning</label><input type="range" id="choke" min="0" max="100" step="1" disabled><output id="choke-v" class="num">0 %</output></div>
+        <canvas id="cv-kill" style="height: 230px" aria-label="Drepeskjema"></canvas>
+        <p class="hint">Auto-choken holder borerørstrykket på drepeskjemaet, slik en borer gjør det manuelt. Velg Manuell om du vil prøve selv.</p>
+      </div>
+      <div class="pane" data-pane="ev" hidden>
+        <h3 style="font-size:17px">Borerapport (hendelser)</h3>
+        <ul class="events" id="events"></ul>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ================= PVT-LAB ================= -->
+  <section id="view-pvt" class="view" role="tabpanel" aria-labelledby="tab-pvt" hidden></section>
+
+  <!-- ================= ORDLISTE ================= -->
+  <section id="view-glossary" class="view" role="tabpanel" aria-labelledby="tab-glossary" hidden></section>
+</main>
+
+<div class="modal" id="start" hidden>
+  <div class="box" role="dialog" aria-labelledby="start-title" aria-modal="true">
+    <div class="eyebrow">Brønn 35/13-1 · Tampen-området, nordlige Nordsjøen</div>
+    <h2 id="start-title">Velg hvor du vil starte</h2>
+    <p class="lead">Du er borer på en halvt nedsenkbar rigg. Bor brønnen ned til Brent-reservoaret på rundt 2900 m. Følg med på trykket, ta koblinger, og steng brønnen hvis den begynner å flyte.</p>
+    <div class="scen" id="scen"></div>
+    <p class="foot">Tips: I 3D kan du rotere med venstre museknapp, flytte med høyre og zoome med hjulet (eller fingrene på mobil). Klikk på en riggdel for å se hva den heter.</p>
+  </div>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

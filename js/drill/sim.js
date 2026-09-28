@@ -16,6 +16,7 @@ import {
   totalVol, mergeSegs, removeFromEnd, removeFromStart, areaFromIn,
 } from './wellbore.js';
 import { zDAK, pseudoCritical } from '../pvt/gas.js';
+import { nf } from '../util/format.js';
 
 const E_STEEL = 2.07e11;           // Pa
 const R_BAR = 0.0831446;           // bar·m³/(kmol·K)
@@ -165,8 +166,9 @@ export class DrillSim {
     this._lastFormationId = formationAt(this.holeDepth)?.id;
     this._computePressures();
     this.pitGainRef = this.pitVolume;
-    this.logEvent(`Scenario: ${sc.title}. Brønn ${this.section.title.toLowerCase()} – hulldybde ${this.holeDepth.toFixed(0)} m.`, 'info');
-    if (k > 0) this.logEvent(`Formasjonsstyrketest (FIT) ved ${this.lastShoe.toFixed(0)} m sko: ${this.lotEMW.toFixed(2)} sg EMW.`, 'info');
+    this._synthLog();
+    this.logEvent(`Scenario: ${sc.title}. Brønn ${this.section.title.toLowerCase()} – hulldybde ${nf(this.holeDepth, 0)} m.`, 'info');
+    if (k > 0) this.logEvent(`Formasjonsstyrketest (FIT) ved ${nf(this.lastShoe, 0)} m sko: ${nf(this.lotEMW, 2)} sg EMW.`, 'info');
     this.emit('reset');
   }
 
@@ -188,7 +190,7 @@ export class DrillSim {
 
   update(dtReal) {
     if (this.paused || this.gameOver) return;
-    let simDt = Math.min(dtReal, 0.1) * this.effectiveTimeScale();
+    let simDt = Math.min(dtReal, 0.25) * this.effectiveTimeScale();
     const frozen = this.op && this.op.frozen;
     const risky = this.bopClosed || this.qInflux > 0 || this.an.some((g) => g.gas);
     const maxStep = frozen ? 120 : risky ? 0.5 : 1.0;
@@ -250,7 +252,7 @@ export class DrillSim {
     if (this.Q <= 0) { this.sppLimited = false; return; }
     if (this.spp > PUMP.popOff) {
       this.pumpsRunning = false;
-      this.logEvent(`Sikkerhetsventilen (pop-off) løste ut ved ${this.spp.toFixed(0)} bar – pumpene stoppet.`, 'alarm');
+      this.logEvent(`Sikkerhetsventilen (pop-off) løste ut ved ${nf(this.spp, 0)} bar – pumpene stoppet.`, 'alarm');
       return;
     }
     const n = Math.max(this.pumpsOnCount, 1);
@@ -712,7 +714,7 @@ export class DrillSim {
       if (T > TOP_DRIVE.stallTorque) {
         this.rotOn = false;
         this.rpm = 0;
-        this.logEvent(`Toppdrevet stanset: dreiemomentet (${T.toFixed(0)} kN·m) passerte grensen.`, 'alarm');
+        this.logEvent(`Toppdrevet stanset: dreiemomentet (${nf(T, 0)} kN·m) passerte grensen.`, 'alarm');
         T = 0;
       }
     }
@@ -767,7 +769,7 @@ export class DrillSim {
     // Formasjonstopper
     if (f.id !== this._lastFormationId) {
       this._lastFormationId = f.id;
-      this.logEvent(`Ny formasjon på ${f.top.toFixed(0)} m: ${f.name} – ${f.lith.toLowerCase()} (${f.age}).`, f.perm ? 'warn' : 'info');
+      this.logEvent(`Ny formasjon på ${nf(f.top, 0)} m: ${f.name} – ${f.lith.toLowerCase()} (${f.age}).`, f.perm ? 'warn' : 'info');
       this.emit('formation', f);
     }
     if (this.holeDepth >= this.section.casing.shoe - 0.5 && !this._tdNotified) {
@@ -799,6 +801,34 @@ export class DrillSim {
       pore: poreEMW(this.holeDepth),
     });
     if (this.depthLog.length > 6000) this.depthLog.shift();
+  }
+
+  // Borelogg for intervallet som allerede er boret når man starter midt i brønnen
+  _synthLog() {
+    const zEnd = Math.floor(this.holeDepth) - 1;
+    for (let z = Math.ceil(SEABED) + 2; z < zEnd; z += 2) {
+      const j = SECTIONS.findIndex((sec) => z <= sec.casing.shoe);
+      const sec = SECTIONS[Math.max(j, 0)];
+      const f = formationAt(z) || FORMATIONS[0];
+      const mw = sec.mud.sg;
+      const ecd = mw + (sec.riserless ? 0.01 : 0.03);
+      const noise = Math.sin(z * 0.37) * 0.5 + Math.sin(z * 1.91) * 0.5;
+      const res = ropBourgoyneYoung({
+        a1: f.a1 + sec.bit.factor, Dft: z * FT_PER_M, gp: poreEMW(z) * PPG_PER_SG, ecd: ecd * PPG_PER_SG,
+        wd: sec.wob * 2.20462 / sec.bit.size, N: sec.rpm, h: 0.3, Fj: 1200,
+      });
+      const rop = res.rop * 0.3048 * (1 + 0.12 * noise);
+      const [gr0, rt0] = LWD[f.id] || [80, 2];
+      let rt = rt0;
+      if (f.perm && f.perm.owc && z > f.perm.owc) rt = 0.8;
+      const ob = (mw - poreEMW(z)) * G * z;
+      this.depthLog.push({
+        z, rop, wob: sec.wob, rpm: sec.rpm, torque: null, spp: null, ecd, mw,
+        dc: dcExponent(rop, sec.rpm, sec.wob, sec.bit.size, ecd),
+        gas: 0.04 + f.gas * 0.05 * Math.exp(-Math.max(ob, 0) / 15) + f.gas * rop * Math.PI / 4 * inch(sec.bit.size) ** 2 * 0.75,
+        gr: Math.max(5, gr0 * (1 + 0.12 * noise)), rt: Math.max(0.2, rt * (1 + 0.15 * noise)), fid: f.id, pore: poreEMW(z),
+      });
+    }
   }
 
   // ---------- Slamblanding ----------
@@ -839,7 +869,7 @@ export class DrillSim {
       this.pitSg = this.pitTargetSg;
       if (this._mixing) {
         this._mixing = false;
-        this.logEvent(`Slamtankene er blandet til ${this.pitSg.toFixed(2)} sg.`, 'info');
+        this.logEvent(`Slamtankene er blandet til ${nf(this.pitSg, 2)} sg.`, 'info');
       }
     }
   }
@@ -895,15 +925,15 @@ export class DrillSim {
     const riser = !this.section.riserless;
     if (riser) {
       const gain = this.pitGain;
-      if (gain > 1.0) add('pitgain', 'critical', `Tankøkning ${gain.toFixed(1)} m³ – mulig brønnspark`);
-      else if (gain < -3) add('pitloss', 'warning', `Tanktap ${(-gain).toFixed(1)} m³ – mulige tap til formasjon`);
+      if (gain > 1.0) add('pitgain', 'critical', `Tankøkning ${nf(gain, 1)} m³ – mulig brønnspark`);
+      else if (gain < -3) add('pitloss', 'warning', `Tanktap ${nf((-gain), 1)} m³ – mulige tap til formasjon`);
       if (!this.bopClosed && this.Q > 0 && this.flowOut !== null && this.flowOut > this.Q * 1.1 + 0.002) add('flowout', 'critical', 'Retur større enn pumperate');
       if (this.Q === 0 && !this.bopClosed && this.flowOut > 0.0015) add('flowing', 'critical', 'Brønnen flyter med pumpene stoppet');
-      if (this.qLoss > 0.0005) add('losses', 'serious', `Tap til formasjon ${(this.qLoss * 60000).toFixed(0)} L/min`);
+      if (this.qLoss > 0.0005) add('losses', 'serious', `Tap til formasjon ${nf((this.qLoss * 60000), 0)} L/min`);
     }
-    if (this.gasUnits > 5) add('gas', this.gasUnits > 20 ? 'critical' : 'warning', `Høy gass i returen: ${this.gasUnits.toFixed(1)} %`);
-    if (this.ecdShoe > this.lotEMW - 0.02 && this.Q > 0) add('ecd', 'serious', `ECD ved skoen ${this.ecdShoe.toFixed(2)} sg nær FIT ${this.lotEMW.toFixed(2)} sg`);
-    if (this.bopClosed && this.chokeP > this.maasp * 0.9 && this.maasp > 0) add('maasp', 'critical', `Chokettrykk nær MAASP (${this.maasp.toFixed(0)} bar)`);
+    if (this.gasUnits > 5) add('gas', this.gasUnits > 20 ? 'critical' : 'warning', `Høy gass i returen: ${nf(this.gasUnits, 1)} %`);
+    if (this.ecdShoe > this.lotEMW - 0.02 && this.Q > 0) add('ecd', 'serious', `ECD ved skoen ${nf(this.ecdShoe, 2)} sg nær FIT ${nf(this.lotEMW, 2)} sg`);
+    if (this.bopClosed && this.chokeP > this.maasp * 0.9 && this.maasp > 0) add('maasp', 'critical', `Chokettrykk nær MAASP (${nf(this.maasp, 0)} bar)`);
     if (this.stickSlip > 0.3) add('stickslip', 'warning', 'Stick-slip: øk rotasjonen eller reduser vekt på krona');
     if (this.cuttingsLoad > 0.4) add('cleaning', 'warning', 'Dårlig hullrensk: øk pumperaten');
     if (this.bitWear > 0.85) add('bit', 'warning', `Krona er ${Math.round(this.bitWear * 100)} % slitt`);
@@ -965,8 +995,8 @@ export class DrillSim {
     this.pitTargetSg = target;
     this._mixing = true;
     this.logEvent(target >= this.pitSg
-      ? `Vekter opp slamtankene til ${target.toFixed(2)} sg (ca. ${barite.toFixed(0)} tonn barytt).`
-      : `Fortynner slammet til ${target.toFixed(2)} sg med ${this.mud.type === 'OBM' ? 'baseolje' : 'vann'}.`, 'info');
+      ? `Vekter opp slamtankene til ${nf(target, 2)} sg (ca. ${nf(barite, 0)} tonn barytt).`
+      : `Fortynner slammet til ${nf(target, 2)} sg med ${this.mud.type === 'OBM' ? 'baseolje' : 'vann'}.`, 'info');
   }
 
   closeBOP() {
@@ -989,14 +1019,14 @@ export class DrillSim {
     this.bhpTarget = null;
     this.chokeMode = 'auto';
     this.shutIn = { t: this.t, pitGain: this.pitGain, stable: false, sidpp: null, sicp: null };
-    this.logEvent(`BOP stengt (ringromssikring, hard shut-in) på ${this.bitDepth.toFixed(0)} m.${warn.length ? ' Advarsel: ' + warn.join(' og ') + '.' : ''}`, 'warn');
+    this.logEvent(`BOP stengt (ringromssikring, hard shut-in) på ${nf(this.bitDepth, 0)} m.${warn.length ? ' Advarsel: ' + warn.join(' og ') + '.' : ''}`, 'warn');
     this.emit('bop', true);
   }
 
   openBOP() {
     if (!this.bopClosed) return;
     if (this.chokeP > 1.0 || this.sidpp > 1.0) {
-      this.logEvent(`BOP kan ikke åpnes: det er ${Math.max(this.chokeP, this.sidpp).toFixed(1)} bar trykk i brønnen. Drep brønnen først.`, 'warn');
+      this.logEvent(`BOP kan ikke åpnes: det er ${nf(Math.max(this.chokeP, this.sidpp), 1)} bar trykk i brønnen. Drep brønnen først.`, 'warn');
       return false;
     }
     if (this.an.some((g) => g.gas)) {
@@ -1079,7 +1109,7 @@ export class DrillSim {
     if (!this.bopClosed) { this.logEvent('Brønnen må være stengt før drepeoperasjonen starter.', 'warn'); return false; }
     const ks = this.killSheet();
     if (method === 'ww' && this.pitSg < ks.kmwRound - 0.004) {
-      this.logEvent(`Vent-og-vekt krever drepeslam i tankene: bland til ${ks.kmwRound.toFixed(2)} sg først.`, 'warn');
+      this.logEvent(`Vent-og-vekt krever drepeslam i tankene: bland til ${nf(ks.kmwRound, 2)} sg først.`, 'warn');
       return false;
     }
     this.kill = {
@@ -1092,8 +1122,8 @@ export class DrillSim {
     this.spmSet = SCR_SPM;
     this.pumpsRunning = true;
     this.logEvent(method === 'ww'
-      ? `Starter dreping med vent-og-vekt-metoden: ${ks.kmwRound.toFixed(2)} sg drepeslam ved ${SCR_SPM} slag/min. ICP ${ks.icp.toFixed(0)} bar → FCP ${ks.fcp.toFixed(0)} bar.`
-      : `Starter borerens metode (1. sirkulasjon med gammelt slam): hold borerørstrykket på ICP ${ks.icp.toFixed(0)} bar.`, 'info');
+      ? `Starter dreping med vent-og-vekt-metoden: ${nf(ks.kmwRound, 2)} sg drepeslam ved ${SCR_SPM} slag/min. ICP ${nf(ks.icp, 0)} bar → FCP ${nf(ks.fcp, 0)} bar.`
+      : `Starter borerens metode (1. sirkulasjon med gammelt slam): hold borerørstrykket på ICP ${nf(ks.icp, 0)} bar.`, 'info');
     return true;
   }
 
@@ -1109,7 +1139,7 @@ export class DrillSim {
         if (this.chokeMode === 'auto' && this.bhpTarget === null && (this.sidpp > 0.5 || this.chokeP > 0.5)) {
           this.bhpTarget = this.bhp + 3;
         }
-        this.logEvent(`Stengte trykk stabilisert: SIDPP ${this.sidpp.toFixed(1)} bar, SICP ${this.chokeP.toFixed(1)} bar, tankøkning ${this.pitGain.toFixed(1)} m³.`, 'warn');
+        this.logEvent(`Stengte trykk stabilisert: SIDPP ${nf(this.sidpp, 1)} bar, SICP ${nf(this.chokeP, 1)} bar, tankøkning ${nf(this.pitGain, 1)} m³.`, 'warn');
         this.emit('shutin', this.shutIn);
       }
     }
@@ -1138,7 +1168,7 @@ export class DrillSim {
       this.Q = 0;
       this.bhpTarget = null;
       this._bleedTrapped();
-      this.logEvent(`Brønnen er drept med ${k.kmw.toFixed(2)} sg slam. SIDPP og SICP er 0 bar. Gjør strømningssjekk og åpne BOP. Tips: legg til tripmargin (+0,03 sg).`, 'info');
+      this.logEvent(`Brønnen er drept med ${nf(k.kmw, 2)} sg slam. SIDPP og SICP er 0 bar. Gjør strømningssjekk og åpne BOP. Tips: legg til tripmargin (+0,03 sg).`, 'info');
       this.emit('killed');
     }
   }
@@ -1169,7 +1199,7 @@ export class DrillSim {
     const k = this.kill;
     if (!k || k.method !== 'drillers' || k.stage !== 2) return false;
     if (this.pitSg < k.kmw - 0.004) {
-      this.logEvent(`Bland drepeslam til ${k.kmw.toFixed(2)} sg før 2. sirkulasjon.`, 'warn');
+      this.logEvent(`Bland drepeslam til ${nf(k.kmw, 2)} sg før 2. sirkulasjon.`, 'warn');
       return false;
     }
     k.strokes0 = this.strokes;
@@ -1269,7 +1299,7 @@ export class DrillSim {
   canConnect() {
     if (this.op) return 'En operasjon pågår allerede.';
     if (this.bopClosed) return 'Brønnen er stengt.';
-    if (this.blockPos > 3.5) return `Toppdrevet står ${this.blockPos.toFixed(1)} m over boredekket. Bor ned stativet først (kobling tas når toppdrevet er under 3,5 m).`;
+    if (this.blockPos > 3.5) return `Toppdrevet står ${nf(this.blockPos, 1)} m over boredekket. Bor ned stativet først (kobling tas når toppdrevet er under 3,5 m).`;
     return null;
   }
 
@@ -1321,8 +1351,8 @@ export class DrillSim {
     if (this.t - fc.t >= fc.dur) {
       const gain = this.pitVolume - fc.gain0;
       this.flowCheck = null;
-      if (gain > 0.15) this.logEvent(`Strømningssjekk: brønnen FLYTER (${gain.toFixed(2)} m³ på 15 min). Steng BOP!`, 'alarm');
-      else this.logEvent(`Strømningssjekk: brønnen er stabil (${gain.toFixed(2)} m³).`, 'info');
+      if (gain > 0.15) this.logEvent(`Strømningssjekk: brønnen FLYTER (${nf(gain, 2)} m³ på 15 min). Steng BOP!`, 'alarm');
+      else this.logEvent(`Strømningssjekk: brønnen er stabil (${nf(gain, 2)} m³).`, 'info');
       this.emit('flowcheck', gain);
     }
   }
@@ -1349,7 +1379,7 @@ export class DrillSim {
     if (this.an.some((g) => g.gas) || this.qInflux > 0) return 'Det er innstrømning eller gass i brønnen. Steng og drep brønnen først.';
     if (Math.abs(this.pitSg - this._avgAnnulusSg()) > 0.02) return 'Slammet i brønnen er ikke sirkulert til samme vekt som tankene. Sirkuler først.';
     const w = this.tripMarginCheck();
-    if (w && w.margin < 0) return `Svabbefare i ${w.f.name}: slamvekten må være minst ${(w.pore + w.swab).toFixed(2)} sg for å ${what}.`;
+    if (w && w.margin < 0) return `Svabbefare i ${w.f.name}: slamvekten må være minst ${nf((w.pore + w.swab), 2)} sg for å ${what}.`;
     return null;
   }
 
@@ -1363,7 +1393,7 @@ export class DrillSim {
     const steps = [
       { label: 'Rundtur: sirkulerer bunnen opp (bottoms up)', dur: bu, start() { self.rotOn = false; self.autoDrill = false; } },
       { label: 'Rundtur: strømningssjekk før uttrekking', dur: 900, start() { self.pumpsRunning = false; } },
-      { label: `Rundtur: trekker ut av hullet (POOH) fra ${depth.toFixed(0)} m`, dur: tOut, update(f) { self._tripAnim(depth, 30, f); } },
+      { label: `Rundtur: trekker ut av hullet (POOH) fra ${nf(depth, 0)} m`, dur: tOut, update(f) { self._tripAnim(depth, 30, f); } },
       { label: `Rundtur: bytter krone (${this.section.bit.name}) og sjekker BHA`, dur: 5400, end() { self.bitWear = 0; self.bitHours = 0; self.bitMeters = 0; self.bitsUsed++; self.cost += 0.9; } },
       { label: 'Rundtur: kjører inn i hullet (RIH)', dur: tIn, update(f) { self._tripAnim(30, depth, f); } },
       { label: 'Rundtur: vasker ned til bunn', dur: 1800, end() { self._settle(depth); } },
@@ -1405,7 +1435,7 @@ export class DrillSim {
   canRunCasing() {
     const plan = this.section.casing.shoe;
     if (this.sectionIndex === SECTIONS.length - 1 && this.holeDepth < TD_PLAN - 10) return `Bor til TD (${TD_PLAN} m) før forlengningsrøret kjøres.`;
-    if (this.holeDepth < plan - 25) return `Hullet (${this.holeDepth.toFixed(0)} m) er ikke dypt nok. Planlagt skodybde er ${plan} m.`;
+    if (this.holeDepth < plan - 25) return `Hullet (${nf(this.holeDepth, 0)} m) er ikke dypt nok. Planlagt skodybde er ${plan} m.`;
     return null;
   }
 
@@ -1449,7 +1479,7 @@ export class DrillSim {
           label: 'Utfører formasjonsstyrketest (FIT/LOT)', dur: 5400, end() {
             self.lotEMW = round2(fracEMW(shoe) - 0.01);
             const mw = self.mud.type !== self.section.mud.type ? self.section.mud.sg : self.pitSg;
-            self.logEvent(`FIT ved ${shoe} m: ${self.lotEMW.toFixed(2)} sg EMW. MAASP med ${mw.toFixed(2)} sg slam: ${Math.max(0, (self.lotEMW - mw) * G * shoe).toFixed(0)} bar.`, 'info');
+            self.logEvent(`FIT ved ${shoe} m: ${nf(self.lotEMW, 2)} sg EMW. MAASP med ${nf(mw, 2)} sg slam: ${nf(Math.max(0, (self.lotEMW - mw) * G * shoe), 0)} bar.`, 'info');
           },
         },
       ];
@@ -1459,13 +1489,13 @@ export class DrillSim {
         if (self.mud.type !== m.type) {
           self.mud = { name: m.name, type: m.type, pv: m.pv, yp: m.yp };
           self.pitSg = m.sg; self.pitTargetSg = m.sg; self.pitVolume = 160;
-          self.logEvent(`Fortrenger til ${m.name.toLowerCase()} ${m.sg.toFixed(2)} sg.`, 'info');
+          self.logEvent(`Fortrenger til ${m.name.toLowerCase()} ${nf(m.sg, 2)} sg.`, 'info');
         }
         self.spmSet = Math.round(self.section.flow / (2 * PUMP.litersPerStroke));
         self.rpmSet = self.section.rpm;
         self.wobSet = self.section.wob;
         self._settle(self.holeDepth - 2);
-        self.logEvent(`Klar for ${self.section.title}. Anbefalt slamvekt fra programmet: ${self.section.mud.sg.toFixed(2)} sg.`, 'info');
+        self.logEvent(`Klar for ${self.section.title}. Anbefalt slamvekt fra programmet: ${nf(self.section.mud.sg, 2)} sg.`, 'info');
       };
       if (afterConductor) {
         const bopSteps = [
